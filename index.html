@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>PHP Evolution — Card Stack</title>
+<title>PHP Evolution — Morph Reel</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -18,36 +18,51 @@
   .scene {
     position: fixed;
     inset: 0;
-    perspective: 1800px;
-    perspective-origin: 50% 45%;
     display: flex;
     align-items: center;
     justify-content: center;
   }
 
-  .deck {
+  .phone {
     position: relative;
-    width: 280px;
-    height: 600px;
-    transform-style: preserve-3d;
-    transform: rotateY(-14deg) rotateX(6deg);
+    width: 300px;
+    height: 640px;
+    background: linear-gradient(160deg, #2a2a2e 0%, #131316 100%);
+    border-radius: 46px;
+    padding: 10px;
+    box-shadow:
+      0 60px 110px rgba(0, 0, 0, 0.55),
+      0 22px 44px rgba(0, 0, 0, 0.4),
+      0 0 0 1px rgba(255, 255, 255, 0.06),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+    animation: float 7s ease-in-out infinite;
   }
 
-  .card {
+  @keyframes float {
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-6px); }
+  }
+
+  .screen {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    background: #fff;
+    border-radius: 36px;
+    overflow: hidden;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+  }
+
+  .frame {
     position: absolute;
     inset: 0;
-    border-radius: 30px;
-    overflow: hidden;
-    background: #fff;
-    box-shadow:
-      0 30px 60px rgba(0, 0, 0, 0.55),
-      0 12px 24px rgba(0, 0, 0, 0.35),
-      0 0 0 1px rgba(255, 255, 255, 0.06);
-    backface-visibility: hidden;
-    will-change: transform, opacity;
+    opacity: 0;
+    transition: opacity 0.55s ease-in-out;
+    will-change: opacity;
   }
+  .frame.active { opacity: 1; }
 
-  .card img {
+  .frame img {
     width: 100%;
     height: 100%;
     object-fit: cover;
@@ -55,6 +70,55 @@
     display: block;
     user-select: none;
     -webkit-user-drag: none;
+  }
+
+  .frame.intro {
+    background: radial-gradient(ellipse at 50% 40%, #0e1024 0%, #050608 75%);
+  }
+  .intro-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+  .intro-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: center;
+    padding: 0 24px 56px;
+    pointer-events: none;
+    z-index: 2;
+  }
+  .intro-tag {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.32em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.45);
+    margin-bottom: 10px;
+  }
+  .intro-name {
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: #fff;
+    text-align: center;
+    line-height: 1.2;
+  }
+  .frame.intro.active .intro-tag {
+    animation: introIn 1.1s ease-out 0.2s both;
+  }
+  .frame.intro.active .intro-name {
+    animation: introIn 1.1s ease-out 0.45s both;
+  }
+  @keyframes introIn {
+    0%   { opacity: 0; transform: translateY(10px); }
+    100% { opacity: 1; transform: translateY(0); }
   }
 
   .controls {
@@ -106,7 +170,9 @@
 </head>
 <body>
   <div class="scene">
-    <div class="deck" id="deck"></div>
+    <div class="phone">
+      <div class="screen" id="screenEl"></div>
+    </div>
   </div>
 
   <div class="loading" id="loading">loading…</div>
@@ -116,120 +182,190 @@
     <button id="restart">Restart</button>
   </div>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-  const TOTAL = 23;
-  const GAP_X = 4;
-  const GAP_Y = 6;
-  const GAP_Z = 20;
-  const FLICK_DURATION = 0.7;
-  const HOLD_DURATION  = 1.1;
-  const END_PAUSE      = 2.2;
+  const IMG_COUNT = 26;
+  const HOLD = 1000;        // ms at full opacity (regular slides)
+  const FADE = 550;         // ms cross-fade (matches CSS)
+  const INTRO_HOLD = 2600;  // ms the intro lingers
+  const END_PAUSE = 2200;   // ms pause before looping
 
-  const deck = document.getElementById('deck');
-  const cards = [];
-  let frontIndex = 0;
+  const screenEl = document.getElementById('screenEl');
+  const frames = [];
+  let active = 0;
   let playing = true;
-  let pendingCall = null;
+  let timer = null;
 
-  for (let i = 0; i < TOTAL; i++) {
-    const card = document.createElement('div');
-    card.className = 'card';
+  // Intro frame (first slide) — 3D wireframe heart + title
+  const introFrame = document.createElement('div');
+  introFrame.className = 'frame intro active';
+  introFrame.innerHTML = `
+    <canvas class="intro-canvas" id="heartCanvas"></canvas>
+    <div class="intro-overlay">
+      <div class="intro-name">PHP landing evolution</div>
+    </div>
+  `;
+  screenEl.appendChild(introFrame);
+  frames.push(introFrame);
+
+  // Image frames
+  for (let i = 0; i < IMG_COUNT; i++) {
+    const f = document.createElement('div');
+    f.className = 'frame';
     const img = document.createElement('img');
     img.src = `${i + 1}.png`;
     img.alt = `Version ${i + 1}`;
-    card.appendChild(img);
-    deck.appendChild(card);
-    cards.push(card);
+    f.appendChild(img);
+    screenEl.appendChild(f);
+    frames.push(f);
   }
 
-  function placeCard(card, offset) {
-    gsap.set(card, {
-      z: -offset * GAP_Z,
-      y:  offset * GAP_Y,
-      x:  offset * GAP_X,
-      rotationX: 0,
-      rotationY: 0,
-      opacity: 1
-    });
-  }
+  const TOTAL = frames.length;
 
-  function hideFlicked(card) {
-    gsap.set(card, { opacity: 0, z: 800, y: -350, x: 140, rotationX: 45, rotationY: 25 });
-  }
-
-  function positionAll() {
-    cards.forEach((card, i) => {
-      const offset = i - frontIndex;
-      if (offset < 0) hideFlicked(card);
-      else placeCard(card, offset);
-    });
-  }
-
-  function flickNext() {
-    if (frontIndex >= TOTAL - 1) return false;
-
-    const flying = cards[frontIndex];
-    const tl = gsap.timeline();
-
-    tl.to(flying, {
-      z: 800,
-      y: -350,
-      x: 140,
-      rotationX: 45,
-      rotationY: 25,
-      opacity: 0,
-      duration: FLICK_DURATION,
-      ease: "power2.in"
-    }, 0);
-
-    for (let i = frontIndex + 1; i < TOTAL; i++) {
-      const newOffset = i - (frontIndex + 1);
-      tl.to(cards[i], {
-        z: -newOffset * GAP_Z,
-        y:  newOffset * GAP_Y,
-        x:  newOffset * GAP_X,
-        duration: FLICK_DURATION,
-        ease: "power2.out"
-      }, 0);
-    }
-
-    frontIndex++;
+  function advance() {
+    if (active >= TOTAL - 1) return false;
+    frames[active].classList.remove('active');
+    active++;
+    frames[active].classList.add('active');
     return true;
   }
 
   function loop() {
     if (!playing) return;
 
-    if (frontIndex >= TOTAL - 1) {
-      pendingCall = gsap.delayedCall(END_PAUSE, () => { if (playing) restart(); });
+    if (active >= TOTAL - 1) {
+      timer = setTimeout(() => { if (playing) restart(); }, END_PAUSE);
       return;
     }
 
-    pendingCall = gsap.delayedCall(HOLD_DURATION, () => {
+    const delay = (active === 0 ? INTRO_HOLD : HOLD) + FADE;
+    timer = setTimeout(() => {
       if (!playing) return;
-      flickNext();
+      advance();
       loop();
-    });
+    }, delay);
   }
 
   function restart() {
-    if (pendingCall) pendingCall.kill();
-    frontIndex = 0;
-    positionAll();
+    if (timer) { clearTimeout(timer); timer = null; }
+    frames.forEach((f, i) => f.classList.toggle('active', i === 0));
+    active = 0;
     if (playing) loop();
   }
 
-  positionAll();
+  // 3D wireframe heart for the intro
+  function buildHeart(color) {
+    const heartShape = new THREE.Shape();
+    const x = 0, y = 0;
+    heartShape.moveTo(x + 5, y + 5);
+    heartShape.bezierCurveTo(x + 5, y + 5, x + 4, y, x, y);
+    heartShape.bezierCurveTo(x - 6, y, x - 6, y + 7, x - 6, y + 7);
+    heartShape.bezierCurveTo(x - 6, y + 11, x - 3, y + 15.4, x + 5, y + 19);
+    heartShape.bezierCurveTo(x + 12, y + 15.4, x + 16, y + 11, x + 16, y + 7);
+    heartShape.bezierCurveTo(x + 16, y + 7, x + 16, y, x + 10, y);
+    heartShape.bezierCurveTo(x + 7, y, x + 5, y + 5, x + 5, y + 5);
 
-  const imgs = deck.querySelectorAll('img');
+    const N_LON = 64;   // points around heart contour
+    const N_LAT = 18;   // slices along z (depth)
+    const DEPTH = 11;
+
+    const raw = heartShape.getSpacedPoints(N_LON);
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of raw) {
+      if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+    }
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const pts = raw.map(p => ({ x: p.x - cx, y: -(p.y - cy) })); // flip Y so point is down
+
+    const slices = [];
+    for (let s = 0; s < N_LAT; s++) {
+      const t = s / (N_LAT - 1);
+      const u = 2 * t - 1;
+      const bulge = Math.sqrt(Math.max(0, 1 - u * u));
+      const z = u * DEPTH / 2;
+      slices.push(pts.map(p => new THREE.Vector3(p.x * bulge, p.y * bulge, z)));
+    }
+
+    const positions = [];
+    // Longitudinal lines on each non-degenerate slice (around heart silhouette)
+    for (let s = 1; s < slices.length - 1; s++) {
+      const slice = slices[s];
+      for (let i = 0; i < slice.length - 1; i++) {
+        const a = slice[i], b = slice[i + 1];
+        positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      }
+    }
+    // Latitudinal lines connecting matching points across slices
+    const nP = slices[0].length;
+    for (let i = 0; i < nP; i++) {
+      for (let s = 0; s < slices.length - 1; s++) {
+        const a = slices[s][i], b = slices[s + 1][i];
+        positions.push(a.x, a.y, a.z, b.x, b.y, b.z);
+      }
+    }
+
+    const geom = new THREE.BufferGeometry();
+    geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    const mat = new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.9 });
+    return new THREE.LineSegments(geom, mat);
+  }
+
+  function initHeart() {
+    const canvas = document.getElementById('heartCanvas');
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 1000);
+
+    const heart = buildHeart(0x3D45E0);
+    scene.add(heart);
+
+    // Soft glow halo (slightly larger, dimmer copy)
+    const halo = buildHeart(0x6a72ff);
+    halo.material.opacity = 0.18;
+    halo.scale.setScalar(1.06);
+    scene.add(halo);
+
+    function resize() {
+      const w = canvas.clientWidth;
+      const h = canvas.clientHeight;
+      if (!w || !h) return;
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h;
+      // Fit heart (~22 wide, ~19 tall, depth 11) into view with padding
+      const halfH = 13;
+      const halfW = 13 / camera.aspect;
+      const fit = Math.max(halfH, halfW);
+      camera.position.set(0, 0, fit / Math.tan((camera.fov / 2) * Math.PI / 180) + 6);
+      camera.updateProjectionMatrix();
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    const start = performance.now();
+    function tick() {
+      const t = (performance.now() - start) / 1000;
+      heart.rotation.y = t * 0.55;
+      heart.rotation.x = Math.sin(t * 0.6) * 0.18;
+      halo.rotation.copy(heart.rotation);
+      renderer.render(scene, camera);
+      requestAnimationFrame(tick);
+    }
+    tick();
+  }
+
+  const imgs = screenEl.querySelectorAll('img');
   Promise.all([...imgs].map(img =>
     img.complete
       ? Promise.resolve()
       : new Promise(res => { img.onload = img.onerror = res; })
   )).then(() => {
     document.getElementById('loading').classList.add('hidden');
-    gsap.delayedCall(0.5, loop);
+    initHeart();
+    setTimeout(loop, 600);
   });
 
   const playPauseBtn = document.getElementById('playPause');
@@ -237,7 +373,7 @@
     playing = !playing;
     playPauseBtn.textContent = playing ? 'Pause' : 'Play';
     if (playing) loop();
-    else if (pendingCall) pendingCall.kill();
+    else if (timer) { clearTimeout(timer); timer = null; }
   });
 
   document.getElementById('restart').addEventListener('click', restart);
@@ -249,8 +385,8 @@
     } else if (e.code === 'ArrowRight') {
       playing = false;
       playPauseBtn.textContent = 'Play';
-      if (pendingCall) pendingCall.kill();
-      flickNext();
+      if (timer) { clearTimeout(timer); timer = null; }
+      advance();
     } else if (e.code === 'KeyR') {
       restart();
     }
